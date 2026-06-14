@@ -1,4 +1,4 @@
-# SmartPrep AI
+# MediQuest
 
 A Next.js 14 application with TypeScript, Tailwind CSS, and Shadcn/UI integration.
 
