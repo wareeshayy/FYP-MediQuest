@@ -71,7 +71,7 @@ MediQuest brings everything together in one place — AI-generated practice ques
 |-------|-------------|
 | **Frontend** | Next.js 14, React 18, TypeScript, Tailwind CSS, Shadcn/UI, Framer Motion |
 | **Backend** | Next.js API Routes, Supabase (Auth, PostgreSQL, RLS) |
-| **AI / ML** | Groq SDK, Hugging Face Inference API, OpenAI (optional), Google Gemini (optional) |
+| **AI / ML** | Groq SDK, Hugging Face Inference API, OpenAI (optional),LLM Fine-Tuning |
 | **Charts** | Chart.js, react-chartjs-2 |
 | **Integrations** | Zoom API (expert sessions), PDF parsing |
 | **Validation** | Zod, React Hook Form |
@@ -134,9 +134,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 
 # Required — AI (at least one)
-GROQ_API_KEY=your_groq_api_key
 HUGGINGFACE_API_KEY=your_huggingface_token
-MEDICAL_AI_PROVIDER=groq
+
 
 # Optional — Zoom expert sessions
 ZOOM_CLIENT_ID=your_zoom_client_id
@@ -196,12 +195,6 @@ Only `.env.local.example` (with placeholder values) is included for setup refere
 **Department:** Computer Science  
 **Institution:** National University of Computer and Emerging Sciences (FAST-NU), Chiniot  
 **Year:** 2025
-
----
-
-## Screenshots
-
-> *Add screenshots of Dashboard, Create Quiz, Reading Material, Analytics, and Expert Portal here.*
 
 ---
 
