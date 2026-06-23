@@ -14,6 +14,7 @@ import {
   type MedicalChatMessage,
 } from "@/lib/medicalAI";
 import { callHuggingFaceMedicalLLM, isHuggingFaceConfigured } from "@/lib/huggingface";
+import { enrichQuizContentWithRAG } from "@/lib/rag/enrich";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -107,8 +108,15 @@ export async function POST(request: NextRequest) {
     
     console.log("✅ All required fields present, proceeding with question generation...");
 
+    const enhancedContent = await enrichQuizContentWithRAG({
+      topic,
+      materialId,
+      sourceType,
+      existingContent: typeof content === "string" ? content : undefined,
+    });
+
     const topicError = guardMedicalTopic(topic, {
-      content: typeof content === "string" ? content : "",
+      content: enhancedContent ?? (typeof content === "string" ? content : ""),
       sourceType,
       materialId,
     });
@@ -122,7 +130,7 @@ export async function POST(request: NextRequest) {
       topic,
       difficulty,
       numberOfQuestions: numQuestions,
-      content: typeof content === "string" ? content : undefined,
+      content: enhancedContent,
       sourceType,
     };
 

@@ -8,6 +8,7 @@ import {
   MEDICAL_CHAT_MAX_TOKENS,
 } from "@/lib/medicalAI";
 import { OUT_OF_SCOPE_MESSAGE } from "@/lib/promptBuilder";
+import { enrichChatContextWithRAG } from "@/lib/rag/enrich";
 
 const groqApiKey = process.env.GROQ_API_KEY;
 
@@ -49,7 +50,16 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const groqMessages = buildMedicalChatMessages(messages, context);
+    const enrichedContext = lastUserMessage?.content
+      ? await enrichChatContextWithRAG({
+          query: String(lastUserMessage.content),
+          existingContext: typeof context === "string" ? context : undefined,
+        })
+      : typeof context === "string"
+        ? context
+        : undefined;
+
+    const groqMessages = buildMedicalChatMessages(messages, enrichedContext);
 
     const availableModels = [
       "llama-3.1-8b-instant",
