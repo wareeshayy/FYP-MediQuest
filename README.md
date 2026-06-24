@@ -11,7 +11,7 @@
 [![Supabase](https://img.shields.io/badge/Supabase-Auth%20%26%20DB-3ECF8E?style=for-the-badge&logo=supabase)](https://supabase.com/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-CSS-38B2AC?style=for-the-badge&logo=tailwind-css)](https://tailwindcss.com/)
 
-[Live Demo](#) · [Report Bug](https://github.com/wareeshayy/FYP-MediQuest/issues) · [Request Feature](https://github.com/wareeshayy/FYP-MediQuest/issues)
+[Live Demo](https://fyp-medi-quest.vercel.app) · [SRS Document](docs/MEDIQUEST-SRS.pdf) · [Report Bug](https://github.com/wareeshayy/FYP-MediQuest/issues)
 
 </div>
 
@@ -59,9 +59,187 @@ MediQuest brings everything together in one place — AI-generated practice ques
 
 ### AI & Medical Safety Layer
 - Multi-provider AI pipeline: **Groq**, **Hugging Face** (MedAlpaca / MedGemma), with automatic fallback
+- **RAG (Retrieval-Augmented Generation)** — grounded answers & MCQs from 17 USMLE PDFs
 - Strict **USMLE/medical-only** topic validation — non-medical queries are blocked
 - PDF text extraction for context-aware question generation
 - Structured JSON output with explanations for every MCQ
+
+---
+
+## RAG Implementation (Retrieval-Augmented Generation)
+
+MediQuest uses **RAG** to reduce AI hallucination and ground quiz generation and chatbot answers in **verified USMLE study PDFs** instead of relying only on the LLM's memory.
+
+### Why RAG?
+
+| Without RAG | With RAG |
+|-------------|----------|
+| Full PDF text truncated (~14k chars) sent to LLM | Only **top relevant chunks** retrieved per query |
+| Irrelevant paragraphs waste context window | Cosine similarity finds on-topic excerpts |
+| Higher hallucination risk | Answers cite material from Pharmacology, Cardiology, etc. |
+| Same context for every topic | Dynamic retrieval per student question/topic |
+
+### Architecture Overview
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  OFFLINE — INGEST (one-time: npm run rag:ingest)                 │
+│                                                                  │
+│  17 PDFs (public/reading-material/)                              │
+│       ↓ pdf-parse extract                                        │
+│  Raw text per subject                                            │
+│       ↓ chunkText() — 1800 chars, 200 overlap                    │
+│  ~998 text chunks                                                │
+│       ↓ Hugging Face embeddings (all-MiniLM-L6-v2)               │
+│  Vector index → data/rag/chunks.json                             │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+┌──────────────────────────────────────────────────────────────────┐
+│  ONLINE — RETRIEVE + GENERATE (every quiz / chat request)        │
+│                                                                  │
+│  Student query / quiz topic                                      │
+│       ↓ embed query (same HF model)                              │
+│       ↓ cosine similarity vs all chunks                          │
+│       ↓ top-K chunks (K=6 quiz, K=4 chat)                        │
+│       ↓ buildRAGContext() — formatted prompt context             │
+│       ↓ Groq / Hugging Face LLM (existing medical guardrails)    │
+│  USMLE MCQs or chat answer (grounded in PDFs)                    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### RAG Pipeline — Step by Step
+
+#### Step 1: Document Ingestion
+- **Source:** 17 curated PDFs in `public/reading-material/` (Biochemistry, Pharmacology, Cardiovascular, First Aid, etc.)
+- **Script:** `npm run rag:ingest` → runs `scripts/ingest-rag.ts`
+- **Process:** For each PDF → extract text → split into chunks → embed each chunk → save to index
+
+#### Step 2: Chunking
+- **File:** `src/lib/rag/chunkText.ts`
+- **Chunk size:** 1,800 characters
+- **Overlap:** 200 characters (preserves context across chunk boundaries)
+- **Minimum chunk:** 80 characters (filters noise)
+
+#### Step 3: Embeddings
+- **File:** `src/lib/rag/embeddings.ts`
+- **Model:** `sentence-transformers/all-MiniLM-L6-v2` (via Hugging Face Inference API)
+- **Dimensions:** 384
+- **Normalization:** L2-normalized vectors for cosine similarity
+- **API key:** `HUGGINGFACE_API_KEY` in `.env.local`
+
+#### Step 4: Vector Store
+- **File:** `src/lib/rag/store.ts`
+- **Storage:** `data/rag/chunks.json` (file-based index, ~9.5 MB, 998 chunks)
+- **Not Supabase:** RAG index is separate from Supabase auth/database
+- **Vercel:** Bundled via `outputFileTracingIncludes` in `next.config.mjs`
+
+#### Step 5: Retrieval
+- **File:** `src/lib/rag/retrieve.ts`
+- Embed the user query → cosine similarity against all chunks → return top-K
+- Optional filter by `materialId` (e.g. only Pharmacology PDF)
+- Minimum relevance score threshold: 0.15
+
+#### Step 6: Context Building
+- **File:** `src/lib/rag/buildContext.ts`
+- Formats retrieved chunks with source labels and relevance scores
+- Instructs LLM to use **only** retrieved excerpts
+
+#### Step 7: Integration (non-breaking)
+- **File:** `src/lib/rag/enrich.ts`
+- **Quiz:** `enrichQuizContentWithRAG()` — only when `sourceType === "reading-material"` or `materialId` is set
+- **Chat:** `enrichChatContextWithRAG()` — appends RAG context to existing chat context
+- **Fallback:** If index missing or retrieval fails → original behavior unchanged
+
+### RAG File Structure
+
+```
+src/lib/rag/
+├── types.ts          # RAGChunkRecord, RAGIndex, RetrievedChunk
+├── config.ts         # Chunk size, model, paths, RAG_ENABLED flag
+├── chunkText.ts      # Text splitting with overlap
+├── embeddings.ts     # HF feature extraction + cosine similarity
+├── store.ts          # Load/save data/rag/chunks.json
+├── retrieve.ts       # Top-K semantic search
+├── buildContext.ts   # LLM prompt context formatter
+├── enrich.ts         # Quiz & chat integration layer
+└── ingest.ts         # Batch ingest all 17 PDFs
+
+src/app/api/rag/
+├── status/route.ts   # GET — check index health
+├── search/route.ts   # POST — test retrieval
+└── ingest/route.ts   # POST — rebuild index (Vercel, secret-protected)
+
+scripts/
+└── ingest-rag.ts     # CLI ingest script
+
+data/rag/
+└── chunks.json       # Pre-built vector index (998 chunks)
+```
+
+### Where RAG Is Used
+
+| Feature | API Route | RAG Behavior |
+|---------|-----------|--------------|
+| Quiz from PDF | `/api/generate-questions` | Retrieves chunks for topic + materialId → replaces truncated PDF text |
+| AI Chatbot | `/api/chat` | Retrieves chunks for user question → appends to context |
+| Status check | `/api/rag/status` | Returns chunk count, materials, availability |
+| Manual search | `/api/rag/search` | Debug/test retrieval |
+
+### RAG Environment Variables
+
+```env
+# Required for embeddings (ingest + query-time retrieval)
+HUGGINGFACE_API_KEY=hf_your_token
+
+# Optional — default true; set false to disable RAG
+RAG_ENABLED=true
+
+# Embedding model (default shown)
+RAG_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+# Optional — protects POST /api/rag/ingest on Vercel
+RAG_INGEST_SECRET=your_random_secret
+```
+
+### RAG Setup Commands
+
+```bash
+# Build index locally (requires HUGGINGFACE_API_KEY, ~12 min for 17 PDFs)
+npm run rag:ingest
+
+# Check index status
+curl http://localhost:3000/api/rag/status
+
+# Test retrieval
+curl -X POST http://localhost:3000/api/rag/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"beta blockers mechanism","materialId":"pharmacology","topK":3}'
+```
+
+### Vercel Deployment Notes
+
+1. Add `HUGGINGFACE_API_KEY` to Vercel Environment Variables
+2. `data/rag/chunks.json` is committed to the repo (pre-built index)
+3. `next.config.mjs` includes `outputFileTracingIncludes` so serverless functions can read the index
+4. Verify after deploy: `https://fyp-medi-quest.vercel.app/api/rag/status` → `"available": true`
+
+### RAG Statistics (Current Index)
+
+| Metric | Value |
+|--------|-------|
+| Source PDFs | 17 |
+| Total chunks | 998 |
+| Embedding model | all-MiniLM-L6-v2 |
+| Embedding dimensions | 384 |
+| Index file | `data/rag/chunks.json` |
+
+### Future RAG Enhancements
+
+- Supabase **pgvector** for scalable cloud storage
+- Hybrid search (vector + keyword BM25)
+- Re-ranking with cross-encoder
+- Source citations in chatbot UI
+- Student-uploaded PDF RAG
 
 ---
 
@@ -71,7 +249,7 @@ MediQuest brings everything together in one place — AI-generated practice ques
 |-------|-------------|
 | **Frontend** | Next.js 14, React 18, TypeScript, Tailwind CSS, Shadcn/UI, Framer Motion |
 | **Backend** | Next.js API Routes, Supabase (Auth, PostgreSQL, RLS) |
-| **AI / ML** | Groq SDK, Hugging Face Inference API, OpenAI (optional),LLM Fine-Tuning |
+| **AI / ML** | Groq SDK, Hugging Face Inference API, RAG (embeddings + retrieval), OpenAI (optional) |
 | **Charts** | Chart.js, react-chartjs-2 |
 | **Integrations** | Zoom API (expert sessions), PDF parsing |
 | **Validation** | Zod, React Hook Form |
@@ -82,22 +260,33 @@ MediQuest brings everything together in one place — AI-generated practice ques
 
 ```
 FYP-MediQuest/
+├── docs/
+│   └── MEDIQUEST-SRS.pdf       # Software Requirements Specification (FYP)
+├── data/rag/
+│   └── chunks.json             # RAG vector index (998 chunks)
 ├── public/
-│   └── reading-material/     # USMLE study PDFs
+│   └── reading-material/       # 17 USMLE study PDFs (RAG source)
+├── scripts/
+│   └── ingest-rag.ts           # Build RAG index from PDFs
 ├── src/
-│   ├── app/                  # Pages & API routes (App Router)
-│   │   ├── api/              # generate-questions, chat, zoom, etc.
-│   │   ├── dashboard/        # Student dashboard
-│   │   ├── create-quiz/      # AI quiz builder
-│   │   ├── reading-material/ # PDF library
-│   │   ├── experts/          # Expert profiles (educators only)
-│   │   ├── educator/         # Expert portal
-│   │   └── analytics/        # Performance charts
-│   ├── components/           # UI, layout, auth, chat
-│   ├── hooks/                # useAuth, useUserRole
-│   └── lib/                  # AI, prompts, Supabase, Zoom
-├── .env.local.example        # Environment template (safe to commit)
-└── .gitignore                # Excludes secrets & node_modules
+│   ├── app/
+│   │   ├── api/
+│   │   │   ├── rag/            # RAG status, search, ingest APIs
+│   │   │   ├── generate-questions/
+│   │   │   └── chat/
+│   │   ├── dashboard/
+│   │   ├── create-quiz/
+│   │   ├── reading-material/
+│   │   ├── experts/
+│   │   ├── educator/
+│   │   └── analytics/
+│   ├── lib/
+│   │   ├── rag/                # RAG pipeline modules
+│   │   ├── medicalAI.ts
+│   │   └── promptBuilder.ts
+│   └── components/
+├── .env.local.example
+└── .gitignore
 ```
 
 ---
@@ -134,9 +323,14 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 
 # Required — AI (at least one)
+GROQ_API_KEY=your_groq_api_key
 HUGGINGFACE_API_KEY=your_huggingface_token
+MEDICAL_AI_PROVIDER=groq
 
-
+# RAG (Retrieval-Augmented Generation)
+RAG_ENABLED=true
+RAG_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+RAG_INGEST_SECRET=your_random_secret
 # Optional — Zoom expert sessions
 ZOOM_CLIENT_ID=your_zoom_client_id
 ZOOM_ACCOUNT_ID=your_zoom_account_id
@@ -194,12 +388,22 @@ Only `.env.local.example` (with placeholder values) is included for setup refere
 **Supervisor:** Ma'am Faryal Saud  
 **Department:** Computer Science  
 **Institution:** National University of Computer and Emerging Sciences (FAST-NU), Chiniot  
-**Year:** 2025
+**Year:** 2026
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [MEDIQUEST-SRS.pdf](docs/MEDIQUEST-SRS.pdf) | Full Software Requirements Specification — problem statement, use cases, functional/non-functional requirements, diagrams (FAST-NU FYP) |
+| [README.md](README.md) | Setup guide, tech stack, and **RAG implementation details** |
 
 ---
 
 ## Future Enhancements
 
+- Supabase pgvector migration for RAG at scale
 - Mobile-responsive PWA
 - Collaborative study groups & discussion forums
 - Mock test mode with timed USMLE simulation
