@@ -15,6 +15,7 @@ import {
 } from "@/lib/medicalAI";
 import { callHuggingFaceMedicalLLM, isHuggingFaceConfigured } from "@/lib/huggingface";
 import { enrichQuizContentWithRAG } from "@/lib/rag/enrich";
+import { mcqCriticAgent } from "@/lib/agents/multiAgent";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -201,35 +202,46 @@ export async function POST(request: NextRequest) {
     try {
       questions = parseQuestions(responseText);
     } catch (parseError) {
-      console.error("Error parsing Groq response:", parseError);
+      console.error("Error parsing response:", parseError);
       return NextResponse.json(
         { error: "Failed to parse AI response." },
         { status: 500 }
       );
     }
 
-    questions = enforceMedicalMCQs(questions);
+    // Run MCQ Critic Agent for multi-agent validation and structural self-correction
+    let criticResult = await mcqCriticAgent(questions, topic);
 
-    if (questions.length < numQuestions) {
-      console.warn(`⚠️ Only ${questions.length} medical MCQs passed filter, retrying strictly...`);
+    if (!criticResult.valid || criticResult.correctedQuestions.length < numQuestions) {
+      console.warn(`⚠️ MCQ Critic rejected or returned too few questions (${criticResult.correctedQuestions.length}/${numQuestions}), retrying with strict constraints...`);
+      if (criticResult.feedback) {
+        console.warn(`Critic feedback: ${criticResult.feedback}`);
+      }
+      
       try {
         responseText = await callMedicalLLM(true);
-        questions = enforceMedicalMCQs(parseQuestions(responseText));
+        const retryQuestions = parseQuestions(responseText);
+        criticResult = await mcqCriticAgent(retryQuestions, topic);
       } catch (retryError) {
-        console.error("Retry parse failed:", retryError);
+        console.error("Retry generation/critic verification failed:", retryError);
       }
     }
 
-    if (questions.length === 0) {
+    // Final fallback: use Critic's corrected questions if available, otherwise filter original questions
+    const finalQuestions = criticResult.correctedQuestions.length > 0 
+      ? criticResult.correctedQuestions 
+      : enforceMedicalMCQs(questions);
+
+    if (finalQuestions.length === 0) {
       return NextResponse.json(
         { error: NON_MEDICAL_QUIZ_ERROR },
         { status: 400 }
       );
     }
 
-    questions = questions.slice(0, numQuestions);
+    questions = finalQuestions.slice(0, numQuestions);
 
-    console.log(`✅ ${questions.length} USMLE-style medical MCQs passed validation`);
+    console.log(`✅ ${questions.length} USMLE-style medical MCQs passed validation (Generator-Critic flow)`);
 
     // Store questions in database
     console.log("💾 Storing questions in database...");

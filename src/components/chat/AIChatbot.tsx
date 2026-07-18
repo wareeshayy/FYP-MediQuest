@@ -13,6 +13,12 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  steps?: {
+    thought: string;
+    action?: string;
+    actionInput?: any;
+    observation?: string;
+  }[];
 }
 
 interface AIChatbotProps {
@@ -132,6 +138,7 @@ ${topicName ? `You're working on: **${topicName}**\n` : ''}${sourceContent ? `I 
         role: "assistant",
         content: data.response || "I apologize, but I couldn't generate a response.",
         timestamp: new Date(),
+        steps: data.steps,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -237,13 +244,38 @@ ${topicName ? `You're working on: **${topicName}**\n` : ''}${sourceContent ? `I 
                         </div>
                       )}
                       <div
-                        className={`max-w-[80%] rounded-2xl px-4 py-2 ${
+                        className={`max-w-[80%] rounded-2xl px-4 py-3 ${
                           message.role === "user"
                             ? "bg-gradient-to-r from-teal-500 to-cyan-500 text-white"
                             : "bg-white border border-gray-200 text-gray-800 shadow-sm"
                         }`}
                       >
                         <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                        
+                        {message.role === "assistant" && message.steps && message.steps.length > 0 && (
+                          <details className="mt-3 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-xl p-2 cursor-pointer focus:outline-none select-none">
+                            <summary className="font-semibold text-teal-600 hover:text-teal-700 flex items-center gap-1.5 list-none">
+                              <Sparkles className="h-3.5 w-3.5 animate-pulse text-teal-500" />
+                              <span>Agent Thought Process ({message.steps.length} {message.steps.length === 1 ? 'step' : 'steps'})</span>
+                            </summary>
+                            <div className="mt-2.5 pl-2.5 border-l-2 border-teal-500 space-y-2.5 font-mono text-[10px] max-h-48 overflow-y-auto cursor-text select-text">
+                              {message.steps.map((step, idx) => (
+                                <div key={idx} className="pb-2 border-b border-gray-100 last:border-0 last:pb-0">
+                                  <div className="text-gray-700"><span className="text-purple-600 font-bold">Thought:</span> {step.thought}</div>
+                                  {step.action && (
+                                    <div className="text-blue-600 mt-1"><span className="font-bold">Tool Called:</span> <code className="bg-blue-50 px-1 py-0.5 rounded text-[9px]">{step.action}</code></div>
+                                  )}
+                                  {step.actionInput && (
+                                    <div className="text-gray-500 mt-0.5 pl-2 text-[9px] bg-gray-100/50 p-1 rounded font-sans overflow-x-auto"><span className="font-bold">Args:</span> {JSON.stringify(step.actionInput)}</div>
+                                  )}
+                                  {step.observation && (
+                                    <div className="text-green-700 mt-1.5 max-h-24 overflow-y-auto bg-emerald-50/30 p-1.5 rounded border border-emerald-100/60"><span className="font-bold">Observation:</span> {step.observation.length > 300 ? step.observation.slice(0, 300) + "..." : step.observation}</div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )}
                       </div>
                       {message.role === "user" && (
                         <div className="w-8 h-8 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 flex items-center justify-center flex-shrink-0">
