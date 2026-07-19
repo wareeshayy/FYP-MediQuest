@@ -382,8 +382,6 @@ Only `.env.local.example` (with placeholder values) is included for setup refere
 | Name | Roll No. |
 |------|----------|
 | **Wareesha** | 22F-3441 |
-| **Humna Muhib** | 22F-3345 |
-| **Sania Mazhar** | 22F-3279 |
 
 **Supervisor:** Ma'am Faryal Saud  
 **Department:** Computer Science  
